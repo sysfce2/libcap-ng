@@ -175,8 +175,7 @@ netcap_advanced_missing=""
 for netcap_hdr in \
 	linux/inet_diag.h:$ac_cv_header_linux_inet_diag_h \
 	linux/netlink.h:$ac_cv_header_linux_netlink_h \
-	linux/sock_diag.h:$ac_cv_header_linux_sock_diag_h \
-	linux/vm_sockets.h:$ac_cv_header_linux_vm_sockets_h; do
+	linux/sock_diag.h:$ac_cv_header_linux_sock_diag_h; do
 	netcap_name=${netcap_hdr%%:*}
 	netcap_have=${netcap_hdr#*:}
 	AS_IF([test "x$netcap_have" != xyes], [
@@ -202,6 +201,19 @@ AC_SUBST([NETCAP_ADVANCED_ENABLED], [$build_netcap_advanced])
 AC_SUBST([NETCAP_ADVANCED_STATUS], [$netcap_advanced_status])
 AM_CONDITIONAL([BUILD_NETCAP_ADVANCED],
 	[test "x$build_netcap_advanced" = xyes])
+
+AS_IF([test "x$build_netcap_advanced" = xyes], [
+	AS_IF([test "x$ac_cv_header_linux_vm_sockets_h" = xyes], [
+		AC_DEFINE([HAVE_NETCAP_VSOCK], [1],
+			[Define to 1 if netcap VSOCK support can be built.])
+		netcap_vsock_status="enabled"
+	], [
+		netcap_vsock_status="disabled (missing header: linux/vm_sockets.h)"
+		AC_MSG_WARN([netcap VSOCK support disabled; missing header: linux/vm_sockets.h])
+	])
+], [
+	netcap_vsock_status="disabled (advanced mode disabled)"
+])
 
 AC_ARG_WITH([capability_header],
         [AS_HELP_STRING([--with-capability_header=path : path to capability.h])],
@@ -332,4 +344,5 @@ echo "
 `echo $CFLAGS | fmt -w 50 | sed 's,^,                          ,'`
   __attr_dealloc_free support:  $DEALLOC
   netcap advanced mode:  $netcap_advanced_status
+  netcap VSOCK support:  $netcap_vsock_status
   "

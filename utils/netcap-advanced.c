@@ -37,11 +37,13 @@
 #include <linux/inet_diag.h>
 #include <linux/netlink.h>
 #include <linux/sock_diag.h>
+#ifdef HAVE_NETCAP_VSOCK
 #include <linux/vm_sockets.h>
-#include <limits.h>
 #ifdef HAVE_LINUX_VM_SOCKETS_DIAG_H
 #include <linux/vm_sockets_diag.h>
 #endif
+#endif
+#include <limits.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -1660,6 +1662,7 @@ next:
 	return 0;
 }
 
+#ifdef HAVE_NETCAP_VSOCK
 /*
  * add_vsock_endpoint - add/merge one VSOCK endpoint in @m.
  * @m: model receiving endpoint data.
@@ -1732,6 +1735,7 @@ next:
 	}
 	return 0;
 }
+#endif
 
 /*
  * endpoint_to_ifaces - project one inet bind onto iface/address groupings.
@@ -1928,6 +1932,7 @@ static void parse_packet_file(struct model *m)
 	fclose(f);
 }
 
+#ifdef HAVE_NETCAP_VSOCK
 /*
  * parse_u32_hex_or_dec - parse @s as decimal or hexadecimal u32.
  * @s: numeric token from procfs/netlink text fields.
@@ -1966,6 +1971,7 @@ static int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 	*out = (unsigned int)v;
 	return 0;
 }
+#endif
 
 /*
  * str_is_bdaddr - validate one string as a Bluetooth device address.
@@ -2337,6 +2343,7 @@ static void parse_bluetooth_hci(struct model *m)
 }
 #endif
 
+#ifdef HAVE_NETCAP_VSOCK
 /*
  * parse_vsock_file - fallback VSOCK parser using /proc/net/vsock.
  * @m: model receiving parsed VSOCK endpoint/process mappings.
@@ -2587,6 +2594,7 @@ static int parse_vsock_diag(struct model *m)
 	return -1;
 }
 #endif
+#endif
 
 /*
  * parse_diag_messages - consume inet sock_diag replies for @proto/@af.
@@ -2757,11 +2765,13 @@ static void collect_endpoints(struct model *m)
 	parse_inet_file(m, "/proc/net/raw6", "raw6", AF_INET6);
 	parse_diag_listeners(m);
 	parse_packet_file(m);
+#ifdef HAVE_NETCAP_VSOCK
 	if (parse_vsock_diag(m) < 0) {
 		diag_dbg("vsock diag unavailable (%s), falling back to /proc",
 			strerror(errno));
 		parse_vsock_file(m);
 	}
+#endif
 	parse_bluetooth_rfcomm(m);
 	parse_bluetooth_hci(m);
 }
@@ -3386,6 +3396,7 @@ static void json_escape(const char *s)
 static void render_json(struct model *m)
 {
 	size_t i, j, k, l;
+	int first_plane = 1;
 
 	if (m->eps_n > 1)
 		qsort(m->eps, m->eps_n, sizeof(struct endpoint), endpoint_cmp);
@@ -3400,20 +3411,32 @@ static void render_json(struct model *m)
 		const char *scope = i == PLANE_INET_EXTERNAL ? "external" :
 			i == PLANE_INET_LOOPBACK ? "loopback" : NULL;
 		struct strset seen_ifaces = { 0 };
-		int first_vsock = 1;
 		int first_if = 1;
+#ifdef HAVE_NETCAP_VSOCK
+		int first_vsock = 1;
+#endif
 
+#ifndef HAVE_NETCAP_VSOCK
+		if (i == PLANE_VSOCK)
+			continue;
+#endif
+		if (!first_plane)
+			puts(",");
+		first_plane = 0;
 		printf("    {\"name\": ");
 		json_escape(pname);
 		if (scope) {
 			printf(", \"scope\": ");
 			json_escape(scope);
 		}
+#ifdef HAVE_NETCAP_VSOCK
 		if (i == PLANE_VSOCK)
 			puts(", \"endpoints\": [");
 		else
+#endif
 			puts(", \"ifaces\": [");
 
+#ifdef HAVE_NETCAP_VSOCK
 		if (i == PLANE_VSOCK) {
 			for (j = 0; j < m->eps_n; j++) {
 				struct endpoint *ep = &m->eps[j];
@@ -3446,11 +3469,10 @@ static void render_json(struct model *m)
 				puts("      ]}");
 			}
 			puts("    ]}");
-			if (i + 1 != PLANE_COUNT)
-				puts(",");
 			strset_free(&seen_ifaces);
 			continue;
 		}
+#endif
 
 		for (j = 0; j < m->eps_n; j++) {
 			struct strset seen_addrs = { 0 };
@@ -3527,8 +3549,6 @@ static void render_json(struct model *m)
 		}
 		puts("    ]}");
 		strset_free(&seen_ifaces);
-		if (i + 1 != PLANE_COUNT)
-			puts(",");
 	}
 	puts("  ]");
 	puts("}");

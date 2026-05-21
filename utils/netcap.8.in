@@ -34,9 +34,9 @@ will try to access and report what it can.
 Full output normally requires root,
 or a combination of \fBCAP_DAC_READ_SEARCH\fP (to read other processes'
 \fB/proc/<pid>/fd\fP) and \fBCAP_NET_ADMIN\fP (for
-\fBNETLINK_SOCK_DIAG\fP queries that cover SCTP, DCCP, and VSOCK). Without
-these permissions, the report is partial; missing sock_diag-derived protocols
-are omitted without an explicit warning.
+\fBNETLINK_SOCK_DIAG\fP queries that cover SCTP, DCCP, and, when built with
+VSOCK support, VSOCK). Without these permissions, the report is partial;
+missing sock_diag-derived protocols are omitted without an explicit warning.
 .\" END_ADVANCED
 
 .\" BEGIN_ADVANCED
@@ -138,7 +138,8 @@ These protocols are discovered via \fBNETLINK_SOCK_DIAG\fP, which requires
 \fBCAP_NET_ADMIN\fP; without that capability, SCTP and DCCP listeners are
 silently absent from the report.
 .IP \[bu] 2
-VSOCK: stream LISTEN sockets, plus bound datagram/seqpacket sockets.
+VSOCK: when built with \fBlinux/vm_sockets.h\fP, stream LISTEN sockets,
+plus bound datagram/seqpacket sockets.
 .IP \[bu] 2
 RAW/PACKET: shown as binds; semantics differ from port listeners.
 
@@ -195,6 +196,8 @@ For VSOCK planes, endpoint objects use \fBlabel\fP, \fBvsock_type\fP
 (socket type string: \fBstream\fP/\fBdgram\fP/\fBseqpacket\fP), \fBcid\fP
 (source CID or the string \fBANY\fP), \fBport\fP, and \fBprocesses\fP;
 they do not include \fBproto\fP or \fBbind\fP.
+When built without \fBlinux/vm_sockets.h\fP, the VSOCK plane and VSOCK flags
+are omitted.
 
 Each process object has \fBcomm\fP, optional \fBexe\fP, \fBpid\fP,
 \fBuid\fP, optional \fBunit\fP, \fBcaps\fP,

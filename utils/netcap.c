@@ -30,9 +30,11 @@
 #include <linux/inet_diag.h>
 #include <linux/netlink.h>
 #include <linux/sock_diag.h>
+#ifdef HAVE_NETCAP_VSOCK
 #include <linux/vm_sockets.h>
 #ifdef HAVE_LINUX_VM_SOCKETS_DIAG_H
 #include <linux/vm_sockets_diag.h>
+#endif
 #endif
 #endif
 #include <limits.h>
@@ -438,6 +440,7 @@ static void read_packet(void)
 #endif
 
 #ifdef HAVE_NETCAP_ADVANCED
+#if defined(HAVE_NETCAP_VSOCK) || defined(NETCAP_TEST)
 NETCAP_TESTABLE int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 {
 	char *end;
@@ -467,6 +470,7 @@ NETCAP_TESTABLE int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 	*out = (unsigned int)v;
 	return 0;
 }
+#endif
 
 #ifndef NETCAP_NO_MAIN
 static int read_diag_messages(int fd, int proto, const char *type)
@@ -592,6 +596,7 @@ static void read_diag_listeners(void)
 	(void)sctp_ok;
 }
 
+#ifdef HAVE_NETCAP_VSOCK
 #ifdef HAVE_LINUX_VM_SOCKETS_DIAG_H
 static int read_vsock_diag_messages(int fd)
 {
@@ -783,6 +788,7 @@ static void read_vsock(void)
 }
 #endif
 #endif
+#endif
 
 #ifndef NETCAP_NO_MAIN
 int main(int argc, char **argv)
@@ -874,7 +880,9 @@ int main(int argc, char **argv)
 	// Add listeners from protocols supported in advanced mode
 #ifdef HAVE_NETCAP_ADVANCED
 	read_diag_listeners();
+#ifdef HAVE_NETCAP_VSOCK
 	read_vsock();
+#endif
 #endif
 
 	// Could also do icmp,netlink,unix
