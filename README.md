@@ -208,6 +208,50 @@ cap-audit
 ---------
 As of the 0.9 release of libcap-ng, there is a new utility **cap-audit**. This program can be used to determine the actual capabilities that a program needs. To do this, use it to run the application kind of the way one would use strace. Use '--' to separate the options to cap-audit from the program being audited. You need to use cap-audit as root because it places an eBPF program in the kernel to hook the capability checks to determine what was requested, was it granted, and what syscall did it originate from. When testing a daemon, pass command line options that keep it in the foreground. The following is an example checking sshd: 
 
+cap-audit is optional and has to be enabled at build time:
+
+```
+./configure --enable-cap-audit
+```
+
+The build needs clang, bpftool, libbpf, libaudit, and their development
+headers. It also generates `utils/cap-audit/vmlinux.h` from the running
+kernel's BTF data in `/sys/kernel/btf/vmlinux`, so the build host kernel must
+provide enough BTF and tracing metadata for the BPF program to compile.
+
+The kernel used to build and run cap-audit needs the BPF and tracing support
+used by `utils/cap-audit/cap_audit.bpf.c`. On current kernels, check for these
+options in `/proc/config.gz` or `/boot/config-$(uname -r)`:
+
+```
+CONFIG_BPF=y
+CONFIG_BPF_SYSCALL=y
+CONFIG_BPF_EVENTS=y
+CONFIG_DEBUG_INFO_BTF=y
+CONFIG_FTRACE_SYSCALLS=y
+CONFIG_KPROBES=y
+CONFIG_KRETPROBES=y
+CONFIG_KPROBE_EVENTS=y
+CONFIG_PERF_EVENTS=y
+CONFIG_STACKTRACE=y
+CONFIG_TRACEPOINTS=y
+CONFIG_TRACING=y
+```
+
+`CONFIG_FTRACE_SYSCALLS` is needed for the `raw_syscalls/sys_enter` and
+`raw_syscalls/sys_exit` tracepoint types. If it is missing, the generated
+`vmlinux.h` may not contain `struct trace_event_raw_sys_enter` or
+`struct trace_event_raw_sys_exit`, and `cap_audit.bpf.c` will not compile. A
+quick check for the tracepoint structs used by cap-audit is:
+
+```
+bpftool btf dump file /sys/kernel/btf/vmlinux format c |
+grep -E 'struct trace_event_raw_(sys_enter|sys_exit|sched_process_(fork|exec|template))'
+```
+
+`CONFIG_BPF_JIT` is recommended for performance, but it is not required just to
+build cap-audit.
+
 ```
 cap-audit -- /usr/sbin/sshd -D
 [*] Capability auditor started
