@@ -143,6 +143,70 @@ static int init_capng(void)
 	return 0;
 }
 
+static char *make_path_candidate(const char *dir, size_t dir_len,
+				 const char *target, size_t target_len)
+{
+	char candidate[PATH_MAX];
+
+	if (!dir_len) {
+		/*
+		 * Empty PATH components mean cwd; keep a slash in the
+		 * resolved path so the later execvp() does not search PATH.
+		 */
+		if (target_len + 3 > sizeof(candidate))
+			return NULL;
+		candidate[0] = '.';
+		candidate[1] = '/';
+		memcpy(candidate + 2, target, target_len + 1);
+		return strdup(candidate);
+	}
+
+	if (dir_len + target_len + 2 > sizeof(candidate))
+		return NULL;
+
+	memcpy(candidate, dir, dir_len);
+	candidate[dir_len] = '/';
+	memcpy(candidate + dir_len + 1, target, target_len + 1);
+
+	return strdup(candidate);
+}
+
+static char *resolve_target_command(const char *target)
+{
+	const char *path;
+	const char *dir;
+	size_t target_len;
+
+	if (!target || !target[0])
+		return NULL;
+
+	if (strchr(target, '/'))
+		return access(target, X_OK) == 0 ? strdup(target) : NULL;
+
+	target_len = strlen(target);
+	path = getenv("PATH");
+	if (!path || !path[0])
+		return NULL;
+
+	for (dir = path; dir;) {
+		char *candidate;
+		const char *next = strchr(dir, ':');
+		size_t dir_len = next ? (size_t)(next - dir) : strlen(dir);
+
+		candidate = make_path_candidate(dir, dir_len, target,
+						target_len);
+		if (candidate) {
+			if (access(candidate, X_OK) == 0)
+				return candidate;
+			free(candidate);
+		}
+
+		dir = next ? next + 1 : NULL;
+	}
+
+	return NULL;
+}
+
 static int check_auditor_caps(void)
 {
 	if (!capng_have_capability(CAPNG_EFFECTIVE, CAP_BPF) &&
@@ -208,6 +272,7 @@ int main(int argc, char **argv)
 	pid_t child;
 	pid_t ret_pid;
 	int wstatus;
+	char *target_path;
 
 	if (argc < 2) {
 		usage(stderr, argv[0]);
@@ -249,14 +314,25 @@ int main(int argc, char **argv)
 
 	state.target_argv = &argv[arg_idx];
 
-	if (init_capng() != 0)
+	/*
+	 * Fail before capability checks, BPF setup, or fork/exec tracing so
+	 * a bad target command is reported directly by cap-audit.
+	 */
+	target_path = resolve_target_command(state.target_argv[0]);
+	if (!target_path) {
+		fprintf(stderr, "Error: target is not executable: %s\n",
+			state.target_argv[0]);
 		return 1;
+	}
+
+	if (init_capng() != 0)
+		goto err_target_path;
 
 	if (check_auditor_caps() != 0)
-		return 1;
+		goto err_target_path;
 
 	if (set_memlock_rlimit() != 0)
-		return 1;
+		goto err_target_path;
 
 	state.app.exe = strdup(state.target_argv[0]);
 	state.app.prog_type = UNSUPPORTED;
@@ -265,7 +341,8 @@ int main(int argc, char **argv)
 	if (audit_machine < 0) {
 		fprintf(stderr,
 			"Error: unable to determine hardware architecture for syscall lookup. Exiting.\n");
-		return 1;
+		free(state.app.exe);
+		goto err_target_path;
 	}
 	state.app.execve_nr = audit_name_to_syscall("execve", audit_machine);
 	state.app.mmap_nr = audit_name_to_syscall("mmap", audit_machine);
@@ -279,7 +356,8 @@ int main(int argc, char **argv)
 	if (!state.skel) {
 		fprintf(stderr, "Error: Failed to load BPF program: %s\n",
 			strerror(errno));
-		return 1;
+		free(state.app.exe);
+		goto err_target_path;
 	}
 
 	err = cap_audit_bpf__attach(state.skel);
@@ -287,7 +365,8 @@ int main(int argc, char **argv)
 		fprintf(stderr, "Error: Failed to attach BPF programs: %s\n",
 			strerror(-err));
 		cap_audit_bpf__destroy(state.skel);
-		return 1;
+		free(state.app.exe);
+		goto err_target_path;
 	}
 
 	state.rb = ring_buffer__new(bpf_map__fd(state.skel->maps.cap_events),
@@ -296,7 +375,8 @@ int main(int argc, char **argv)
 		fprintf(stderr, "Error: Failed to create ring buffer: %s\n",
 			strerror(errno));
 		cap_audit_bpf__destroy(state.skel);
-		return 1;
+		free(state.app.exe);
+		goto err_target_path;
 	}
 
 	printf("[*] Capability auditor started\n");
@@ -305,7 +385,8 @@ int main(int argc, char **argv)
 		fprintf(stderr, "Error: pipe failed: %s\n", strerror(errno));
 		ring_buffer__free(state.rb);
 		cap_audit_bpf__destroy(state.skel);
-		return 1;
+		free(state.app.exe);
+		goto err_target_path;
 	}
 
 	child = fork();
@@ -325,7 +406,11 @@ int main(int argc, char **argv)
 			exit(1);
 		}
 		close(state.sync_pipe[0]);
-		execvp(state.target_argv[0], state.target_argv);
+		/*
+		 * Use the resolved candidate so execvp() does not repeat PATH
+		 * lookup, while keeping its normal ENOEXEC shell fallback.
+		 */
+		execvp(target_path, state.target_argv);
 		perror("execvp");
 		exit(1);
 	} else if (child < 0) {
@@ -334,7 +419,8 @@ int main(int argc, char **argv)
 		close(state.sync_pipe[1]);
 		ring_buffer__free(state.rb);
 		cap_audit_bpf__destroy(state.skel);
-		return 1;
+		free(state.app.exe);
+		goto err_target_path;
 	}
 
 	state.app.pid = child;
@@ -347,7 +433,7 @@ int main(int argc, char **argv)
 		ring_buffer__free(state.rb);
 		cap_audit_bpf__destroy(state.skel);
 		free(state.app.exe);
-		return 1;
+		goto err_target_path;
 	}
 
 	if (write(state.sync_pipe[1], "1", 1) != 1) {
@@ -358,7 +444,7 @@ int main(int argc, char **argv)
 		ring_buffer__free(state.rb);
 		cap_audit_bpf__destroy(state.skel);
 		free(state.app.exe);
-		return 1;
+		goto err_target_path;
 	}
 	close(state.sync_pipe[1]);
 
@@ -427,6 +513,7 @@ int main(int argc, char **argv)
 	ring_buffer__free(state.rb);
 	cap_audit_bpf__destroy(state.skel);
 	free(state.app.exe);
+	free(target_path);
 
 	for (int i = 0; i <= CAP_LAST_CAP; i++) {
 		if (state.app.checks[i].reason)
@@ -438,5 +525,9 @@ int main(int argc, char **argv)
 	}
 
 	return 0;
+
+err_target_path:
+	free(target_path);
+	return 1;
 }
 #endif
