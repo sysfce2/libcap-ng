@@ -3157,7 +3157,6 @@ static void render_tree(struct model *m)
 
 	if (m->eps_n > 1)
 		qsort(m->eps, m->eps_n, sizeof(struct endpoint), endpoint_cmp);
-	puts("netcap --advanced");
 
 	for (i = 0; i < PLANE_COUNT; i++) {
 		size_t j;
@@ -3385,7 +3384,6 @@ static void render_interfaces_text(struct model *m)
 	size_t i;
 
 	sort_interfaces(m);
-	puts("netcap --advanced --list-interfaces");
 	for (i = 0; i < m->ifaces_n; i++)
 		printf("%s\n", m->ifaces[i].name);
 }
